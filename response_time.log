@@ -1,0 +1,4 @@
+ÿþ2025-03-06 12:28:41,573 - INFO - Log system initialized.
+2025-03-06 12:28:42,274 - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-03-06 12:30:56,629 - INFO - Log system initialized.
+2025-03-06 12:30:57,126 - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"

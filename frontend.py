@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 import pandas as pd
 import streamlit as st
-from chatbot import  initialize_data
+
 
 import streamlit as st
 from streamlit_extras.add_vertical_space import add_vertical_space

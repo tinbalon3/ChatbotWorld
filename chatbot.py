@@ -8,30 +8,27 @@ import time
 from guardrails import Guard, OnFailAction
 from guardrails_grhub_llamaguard_7b import LlamaGuard7B
 from guardrails_grhub_toxic_language import ToxicLanguage
-import numpy as np
+
 from openai import OpenAI
 import pandas as pd
-from pandasai import SmartDataframe
 from pydantic import ValidationError
-from qdrant_client import QdrantClient
-from qdrant_client.http import models
+
 from dotenv import load_dotenv
-from pandasai_openai import OpenAI as pandasOpenai
 from langchain.agents.agent_types import AgentType
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from langchain_openai import ChatOpenAI
 import logging
-logging.basicConfig(filename='chatbot.log', encoding='utf-8', level=logging.INFO)
+from qdrant_client_call import QdrantHandler
+logging.basicConfig(filename='logs/chatbot.log', encoding='utf-8', level=logging.INFO)
 
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 os.environ["OPENAI_API_KEY"] = api_key
+qdrantHandler_data = QdrantHandler(collection_name='chatbot_world_data')
+qdrantHandler_image = QdrantHandler(collection_name='chatbot_world_img_data')
+df = pd.read_csv("data/csv/countries-of-the-world.csv")
 
-qdrant_client = QdrantClient("localhost", port=6333)
-df = pd.read_csv("data/countries-of-the-world.csv")
-# llm = pandasOpenai(api_token=api_key)
-# agent = SmartDataframe(df,config={"llm":llm})
 agent = create_pandas_dataframe_agent(
     ChatOpenAI(temperature=0, model="gpt-4o-mini"),
     df,
@@ -44,34 +41,13 @@ guard.name = "ChatBotGuard"
 guard.use(ToxicLanguage())
 
 
-
-
-
 def search_agent_pandasAI(query):
     try:
-        # Tinh chỉnh truy vấn để yêu cầu chỉ trả về số
-        # refined_query = f"{query}"
         answer = agent.invoke(query)
-        print(answer)
         return answer
     except Exception as e:
         return str(e)
 
-def create_collection():
-    print("Creating collection 'chatbot_data'...")
-    if qdrant_client.collection_exists("chatbot_world_data"):
-        print("Collection 'chatbot_world_data' already exists!")
-    else:
-        qdrant_client.create_collection(
-        collection_name="chatbot_world_data",
-        vectors_config=models.VectorParams(
-            size=1536,
-            distance=models.Distance.COSINE
-        )
-        
-    )
-        print("Collection 'chatbot_world_data' created!")
-        add_data_to_qdrant()
 
 def get_embedding(text):
     response = client.embeddings.create(
@@ -80,38 +56,23 @@ def get_embedding(text):
     )
     return response.data[0].embedding
 
-
-def add_data_to_qdrant():
-    texts = []
-    try:
-        with open("data/country_detailed_specialties.txt", "r", encoding="utf-8") as file: # Thêm encoding utf-8
-            for line in file:
-                texts.append(line.strip())  # Thêm từng dòng vào texts, loại bỏ khoảng trắng thừa
-    except UnicodeDecodeError as e:
-        print(f"Error decoding file: {e}")
-        return
-
-    vectors = [get_embedding(text) for text in texts]
-    ids = list(range(len(texts)))
-
-    if vectors:
-        print("Adding data to Qdrant...")
-        qdrant_client.upsert(
-            collection_name="chatbot_world_data",
-            points=models.Batch(
-                ids=ids,
-                vectors=vectors,
-                payloads=[{"text": text} for text in texts]
-            )
-        )
-        print("Data added to Qdrant!")
-    else:
-        print("No vectors generated, Qdrant upsert skipped.")
+def search_vector_image(query):
+    query_vector = get_embedding(query)
+    search_result = qdrantHandler_image.qdrant_client.search(
+        collection_name="chatbot_world_img_data",
+        query_vector=query_vector,
+        limit=3  
+    )
+    data = {
+        "url": search_result[0].payload["url"],
+        "description": search_result[0].payload["description"]
+    }
+    return data
 
 def search_vector_database(query):
     
     query_vector = get_embedding(query)
-    search_result = qdrant_client.search(
+    search_result = qdrantHandler_data.qdrant_client.search(
         collection_name="chatbot_world_data",
         query_vector=query_vector,
         limit=3  
@@ -144,12 +105,6 @@ def summarize_results(results,query):
     return summary
 
 
-# def chatbot(query):
-#     results = search_qdrant(query)
-    
-#     summary = summarize_results(results,query)
-#     return summary
-
 def check_args(function, args):
     sig = inspect.signature(function)
     params = sig.parameters
@@ -174,12 +129,9 @@ def draw_plot_pandasAI(query):
     except Exception as e:
         return str(e)
     
-def initialize_data():
-    create_collection()
-    
 def get_current_date():
     return datetime.now().strftime("%Y-%m-%d")
-# initialize_data()
+
 PERSONA = f"""
 You are a friendly and knowledgeable global AI guide. 
 The current date/time is {get_current_date()}. 
@@ -194,7 +146,8 @@ Respond in the user’s language, keeping answers brief and concise.
 AVAILABLE_FUNCTIONS = {
             "search_agent_pandasAI": search_agent_pandasAI,
             "search_vector_database": search_vector_database,
-            "draw_plot_pandasAI": draw_plot_pandasAI
+            "draw_plot_pandasAI": draw_plot_pandasAI,
+            "search_vector_image": search_vector_image
         } 
 
 FUNCTIONS_SPEC = [
@@ -248,13 +201,26 @@ FUNCTIONS_SPEC = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_vector_image",
+            "description": "A search tool for finding images of a country's flag based on the query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query for a country's flag image"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 
-
 ]  
-
-import json
-
 
 
 class SmartAgent:
@@ -278,18 +244,6 @@ class SmartAgent:
             conversation = self.init_history.copy()
         start_time = time.perf_counter()
       
-        # user_input,error, pass_flag =  validate_guardrails(guard, user_input)
-        # Kiểm tra nếu input không hợp lệ
-        # if pass_flag == False:
-        #     end_time = time.perf_counter()
-        #     response_time = end_time - start_time  # Tính thời gian phản hồi
-           
-        #     logging.info(f"User Input: {user_input}")
-        #     logging.info(f"Response Time: {response_time:.4f} seconds")
-        #     logging.info(f"Response: {error}")
-        #     return False, conversation, error, display_pictures
-        
-        
 
         # Nếu hợp lệ, tiếp tục xử lý
         conversation.append({"role": "user", "content": user_input})
